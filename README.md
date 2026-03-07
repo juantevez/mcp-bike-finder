@@ -15,31 +15,31 @@ Este servidor expone herramientas MCP que permiten a un LLM:
 Arquitectura Hexagonal (Puertos y Adaptadores):
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ Host MCP (LLM) │
-│ (Claude Desktop, VSCode, etc.) │
+│ Host MCP (LLM)                                          │
+│ (Claude Desktop, VSCode, etc.)                          │
 └─────────────────────────────────────────────────────────┘
-│
-│ MCP Protocol (JSON-RPC)
-▼
+                          │
+                          │ MCP Protocol (JSON-RPC)
+                          ▼
 ┌─────────────────────────────────────────────────────────┐
-│ Adaptador MCP (internal/mcp) │
+│ Adaptador MCP (internal/mcp)                            │
 └─────────────────────────────────────────────────────────┘
-│
-▼
+                          │
+                          ▼
 ┌─────────────────────────────────────────────────────────┐
-│ Servicios de Aplicación (internal/service) │
-│ - ExtractorService (OCR + Vision) │
-│ - BusquedaService (Scraping) │
-│ - BicicletaService (Gestión de dominio) │
+│ Servicios de Aplicación (internal/service)              │
+│ - ExtractorService (OCR + Vision)                       │
+│ - BusquedaService (Scraping)                            │
+│ - BicicletaService (Gestión de dominio)                 │
 └─────────────────────────────────────────────────────────┘
-│
-▼
+                          │
+                          ▼
 ┌─────────────────────────────────────────────────────────┐
-│ Infraestructura (internal/infrastructure) │
-│ - PostgreSQL Repository │
-│ - AWS S3 Client │
-│ - AWS Textract (OCR) │
-│ - Marketplace Scraper │
+│ Infraestructura (internal/infrastructure)               │
+│ - PostgreSQL Repository                                 │
+│ - AWS S3 Client                                         │
+│ - AWS Textract (OCR)                                    │
+│ - Marketplace Scraper                                   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -91,21 +91,14 @@ go run ./cmd/server
 🛠️ Herramientas MCP Expuestas
 
 
-Herramienta
-Descripción
-Input
-analizar_imagen_bici
-Extrae información de una imagen en S3
-imagen_s3_url
-buscar_bicis_similares
-Busca bicis similares en marketplaces
-imagen_s3_url, presupuesto
-guardar_bicicleta
-Guarda datos de bicicleta en PostgreSQL
-bicicleta_json
-obtener_historial
-Obtiene historial de búsquedas
-usuario_id
+
+
+| Herramienta | Descripción | Input |
+|----------|-------------|--------- |
+| analizar_imagen_bici | Extrae información de una imagen en S3imagen_s3_url|
+| buscar_bicis_similares | Busca bicis similares en marketplaces | imagen_s3_url, presupuesto|
+| guardar_bicicleta| Guarda | datos de bicicleta en PostgreSQL|
+| bicicleta_json | obtener_historial |  Obtiene historial de búsquedas |
 
 
 📦 Recursos MCP Expuestos
