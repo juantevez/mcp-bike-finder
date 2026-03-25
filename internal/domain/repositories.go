@@ -14,6 +14,7 @@ type BicicletaRepository interface {
 	ObtenerPorID(ctx context.Context, id string) (*Bicicleta, error)
 	ObtenerPorMarcaModelo(ctx context.Context, marca, modelo string) ([]*Bicicleta, error)
 	ObtenerPorImagenURL(ctx context.Context, imagenS3URL string) (*Bicicleta, error)
+	ListarActivas(ctx context.Context, limite int) ([]*Bicicleta, error)
 	Actualizar(ctx context.Context, bici *Bicicleta) error
 	Eliminar(ctx context.Context, id string) error
 }
@@ -48,6 +49,18 @@ type ReferenceRepository interface {
 type BusquedaRepository interface {
 	GuardarHistorial(ctx context.Context, historial *BusquedaHistorial) error
 	ObtenerHistorial(ctx context.Context, usuarioID string, limite int) ([]*BusquedaHistorial, error)
+}
+
+// ===========================================
+// AlertaRepository
+// ===========================================
+
+type AlertaRepository interface {
+	Guardar(ctx context.Context, alerta *Alerta) error
+	ObtenerPorBicicleta(ctx context.Context, bicicletaID string) ([]*Alerta, error)
+	ObtenerPorUsuario(ctx context.Context, usuarioID string, status *string) ([]*Alerta, error)
+	ActualizarStatus(ctx context.Context, id string, status string) error
+	ExisteParaBicicletaYURL(ctx context.Context, bicicletaID string, url string) (bool, error)
 }
 
 // ===========================================

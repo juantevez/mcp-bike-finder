@@ -268,6 +268,31 @@ type ImageValidation struct {
 	Objetos     []string `json:"objetos,omitempty"`
 }
 
+// ===========================================
+// Alerta (posible coincidencia de bicicleta robada)
+// ===========================================
+
+const (
+	AlertaStatusNueva      = "NUEVA"
+	AlertaStatusRevisada   = "REVISADA"
+	AlertaStatusDescartada = "DESCARTADA"
+	AlertaStatusConfirmada = "CONFIRMADA"
+)
+
+type Alerta struct {
+	ID             string    `json:"id"`
+	BicicletaID    string    `json:"bicicleta_id"`
+	UsuarioID      string    `json:"usuario_id"`
+	Titulo         string    `json:"titulo"`          // título del listado encontrado
+	URL            string    `json:"url"`             // URL del listado en el marketplace
+	Marketplace    string    `json:"marketplace"`
+	Precio         float64   `json:"precio"`
+	ScoreSimilitud float64   `json:"score_similitud"` // 0-100
+	Status         string    `json:"status"`          // NUEVA | REVISADA | DESCARTADA | CONFIRMADA
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 // SyncToDB actualiza los campos de DB desde los alias (antes de guardar)
 func (b *Bicicleta) SyncToDB() {
 	if b.Marca != "" && b.FrameModel == nil {

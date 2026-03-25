@@ -8,13 +8,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/juantevez/mcp-bike-finder/internal/config"
 	"github.com/juantevez/mcp-bike-finder/internal/infrastructure/database"
-	"github.com/juantevez/mcp-bike-finder/internal/infrastructure/ocr"
-	"github.com/juantevez/mcp-bike-finder/internal/infrastructure/s3"
 	"github.com/juantevez/mcp-bike-finder/internal/infrastructure/scraper"
-	"github.com/juantevez/mcp-bike-finder/internal/infrastructure/vision"
 	"github.com/juantevez/mcp-bike-finder/internal/mcp"
 	"github.com/juantevez/mcp-bike-finder/internal/service"
 )
@@ -68,55 +66,31 @@ func main() {
 	// Repositorios
 	biciRepo := database.NewBicycleRepository(db.Pool(), db.BikeSchema())
 	refRepo := database.NewReferenceRepository(db.Pool(), db.BikeSchema())
-	// Usar mock en lugar de implementación real
 	busquedaRepo := database.NewBusquedaRepositoryMock()
-	//busquedaRepo := database.NewBusquedaRepository(db.Pool(), db.BikeSchema())
-	//fotoRepo := database.NewPhotoRepository(db.Pool(), db.BikeSchema())
-	//userRepo := database.NewUserRepository(db.Pool(), db.AuthSchema())
-
-	// Cliente S3
-	s3Client, err := s3.NewClient(ctx, cfg.AWS)
-	if err != nil {
-		log.Fatalf("Error inicializando cliente S3: %v", err)
-	}
-
-	// Cliente OCR (AWS Textract)
-	var ocrClient *ocr.Client
-	if cfg.OCR.TextractEnabled {
-		// ✅ Pasar cfg.AWS (de tipo config.AWSConfig), NO cfg.OCR
-		ocrClient, err = ocr.NewClient(ctx, cfg.AWS)
-		if err != nil {
-			log.Printf("⚠️ OCR Textract no disponible: %v (usando mock)", err)
-		}
-	}
-
-	// Cliente Vision (AWS Rekognition)
-	visionConfig := config.AWSConfig{ // ✅ Usar directamente config.AWSConfig
-		Region:          cfg.AWS.Region,
-		AccessKeyID:     cfg.AWS.AccessKeyID,
-		SecretAccessKey: cfg.AWS.SecretAccessKey,
-	}
-
-	visionClient, err := vision.NewClient(ctx, visionConfig)
-	if err != nil {
-		log.Printf("⚠️ Vision no disponible: %v (usando mock)", err)
-	}
+	alertaRepo := database.NewAlertaRepositoryMock()
 
 	// ===========================================
 	// 5. Inicializar Servicios (Capa de Aplicación)
 	// ===========================================
-	extractorSvc := service.NewExtractorService(s3Client, ocrClient, visionClient)
+	extractorSvc := service.NewExtractorService(biciRepo)
 	busquedaSvc := service.NewBusquedaService(scraper.ScraperConfig(cfg.Scraper))
-	//bicicletaSvc := service.NewBicicletaService(biciRepo, refRepo, extractorSvc, busquedaSvc)
-
-	// ✅ Llamar con los parámetros en el orden correcto:
-	bicicletaSvc := service.NewBicicletaService(
-		biciRepo,     // 1: domain.BicicletaRepository // FALLA ACA
-		busquedaRepo, // 2: domain.BusquedaRepository
-		refRepo,      // 3: domain.ReferenceRepository ✅  // FALLA ACA
-		extractorSvc, // 4: *ExtractorService
-		busquedaSvc,  // 5: *BusquedaService
+	alertaSvc := service.NewAlertaService(alertaRepo)
+	schedulerSvc := service.NewSchedulerService(
+		biciRepo,
+		busquedaSvc,
+		alertaSvc,
+		time.Duration(cfg.Scheduler.IntervaloHoras)*time.Hour,
+		cfg.Scheduler.LimiteBicis,
 	)
+	bicicletaSvc := service.NewBicicletaService(
+		biciRepo,
+		busquedaRepo,
+		refRepo,
+		extractorSvc,
+		busquedaSvc,
+	)
+
+	go schedulerSvc.Start(ctx)
 
 	// ===========================================
 	// 6. Inicializar Servidor MCP
@@ -126,7 +100,8 @@ func main() {
 		bicicletaSvc,
 		extractorSvc,
 		busquedaSvc,
-		refRepo, // ← domain.ReferenceRepository para handlers de marcas/tipos
+		alertaSvc,
+		refRepo,
 	)
 
 	// ===========================================

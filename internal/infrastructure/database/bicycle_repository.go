@@ -31,23 +31,7 @@ func NewBicycleRepository(pool *pgxpool.Pool, schema string) *BicycleRepository 
 // GuardarBicicleta inserta o actualiza (UPSERT)
 func (r *BicycleRepository) Guardar(ctx context.Context, bici *domain.Bicicleta) error {
 
-	// ✅ Sincronización INLINE: alias → campos de DB antes de guardar
-	// (En lugar de llamar a bici.SyncToDB())
-	if bici.Marca != "" && bici.FrameModel == nil {
-		bici.FrameModel = &bici.Marca
-	}
-	if bici.Modelo != "" && bici.FrameModel == nil {
-		bici.FrameModel = &bici.Modelo
-	}
-	if bici.Anio > 0 && bici.FrameYear == nil {
-		bici.FrameYear = &bici.Anio
-	}
-	if bici.Talle != "" && bici.FrameSizeRaw == nil {
-		bici.FrameSizeRaw = &bici.Talle
-	}
-	if bici.Color != "" && bici.PrimaryColorCustom == nil {
-		bici.PrimaryColorCustom = &bici.Color
-	}
+	bici.SyncToDB()
 
 	query := fmt.Sprintf(`
 		INSERT INTO %s.registered_bicycles 
@@ -129,21 +113,7 @@ func (r *BicycleRepository) ObtenerPorID(ctx context.Context, id string) (*domai
 		json.Unmarshal(specsJSON, &bici.DetailedSpecs)
 	}
 
-	// ✅ Sincronización INLINE: DB → alias para uso conveniente en lógica de negocio
-	// (En lugar de llamar a bici.SyncFromDB())
-	if bici.FrameModel != nil {
-		bici.Marca = *bici.FrameModel
-		bici.Modelo = *bici.FrameModel
-	}
-	if bici.FrameYear != nil {
-		bici.Anio = *bici.FrameYear
-	}
-	if bici.FrameSizeRaw != nil {
-		bici.Talle = *bici.FrameSizeRaw
-	}
-	if bici.PrimaryColorCustom != nil {
-		bici.Color = *bici.PrimaryColorCustom
-	}
+	bici.SyncFromDB()
 
 	return &bici, nil
 }
@@ -399,26 +369,15 @@ func (r *BicycleRepository) ObtenerPorImagenURL(ctx context.Context, imagenS3URL
 		json.Unmarshal(specsJSON, &bici.DetailedSpecs)
 	}
 
-	// Sincronización inline: DB → alias
-	if bici.FrameModel != nil {
-		bici.Marca = *bici.FrameModel
-		bici.Modelo = *bici.FrameModel
-	}
-	if bici.FrameYear != nil {
-		bici.Anio = *bici.FrameYear
-	}
-	if bici.FrameSizeRaw != nil {
-		bici.Talle = *bici.FrameSizeRaw
-	}
-	if bici.PrimaryColorCustom != nil {
-		bici.Color = *bici.PrimaryColorCustom
-	}
+	bici.SyncFromDB()
 
 	return &bici, nil
 }
 
 // Actualizar actualiza una bicicleta existente en la base de datos
 func (r *BicycleRepository) Actualizar(ctx context.Context, bici *domain.Bicicleta) error {
+
+	bici.SyncToDB()
 
 	query := fmt.Sprintf(`
 		UPDATE %s.registered_bicycles
@@ -478,6 +437,57 @@ func (r *BicycleRepository) Eliminar(ctx context.Context, id string) error {
 // Métodos de la Interfaz domain.BicicletaRepository
 // ===========================================
 
+// ListarActivas devuelve todas las bicicletas con status ACTIVE para el scheduler.
+func (r *BicycleRepository) ListarActivas(ctx context.Context, limite int) ([]*domain.Bicicleta, error) {
+	if limite <= 0 {
+		limite = 100
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, user_id, registration_type, frame_model, frame_year,
+		       frame_size_raw, primary_color_custom, color_description,
+		       components, detailed_specs, estimated_current_value,
+		       purchase_price, purchase_currency, status, notes,
+		       created_at, updated_at, "version"
+		FROM %s.registered_bicycles
+		WHERE status = 'ACTIVE'
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, r.schema)
+
+	rows, err := r.pool.Query(ctx, query, limite)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bicicletas []*domain.Bicicleta
+	for rows.Next() {
+		var bici domain.Bicicleta
+		var componentsJSON, specsJSON []byte
+
+		err := rows.Scan(
+			&bici.ID, &bici.UserID, &bici.RegistrationType, &bici.FrameModel, &bici.FrameYear,
+			&bici.FrameSizeRaw, &bici.PrimaryColorCustom, &bici.ColorDescription,
+			&componentsJSON, &specsJSON, &bici.EstimatedCurrentValue,
+			&bici.PurchasePrice, &bici.PurchaseCurrency, &bici.Status, &bici.Notes,
+			&bici.CreatedAt, &bici.UpdatedAt, &bici.Version,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(componentsJSON) > 0 {
+			json.Unmarshal(componentsJSON, &bici.Components)
+		}
+
+		bici.SyncFromDB()
+		bicicletas = append(bicicletas, &bici)
+	}
+
+	return bicicletas, rows.Err()
+}
+
 // ObtenerPorMarcaModelo busca bicicletas por marca y modelo
 func (r *BicycleRepository) ObtenerPorMarcaModelo(ctx context.Context, marca, modelo string) ([]*domain.Bicicleta, error) {
 
@@ -525,20 +535,7 @@ func (r *BicycleRepository) ObtenerPorMarcaModelo(ctx context.Context, marca, mo
 			json.Unmarshal(specsJSON, &bici.DetailedSpecs)
 		}
 
-		// Sincronización inline: DB → alias
-		if bici.FrameModel != nil {
-			bici.Marca = *bici.FrameModel
-			bici.Modelo = *bici.FrameModel
-		}
-		if bici.FrameYear != nil {
-			bici.Anio = *bici.FrameYear
-		}
-		if bici.FrameSizeRaw != nil {
-			bici.Talle = *bici.FrameSizeRaw
-		}
-		if bici.PrimaryColorCustom != nil {
-			bici.Color = *bici.PrimaryColorCustom
-		}
+		bici.SyncFromDB()
 
 		bicicletas = append(bicicletas, &bici)
 	}

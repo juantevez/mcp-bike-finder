@@ -22,24 +22,25 @@ type Server struct {
 	bicicletaSvc *service.BicicletaService
 	extractorSvc *service.ExtractorService
 	busquedaSvc  *service.BusquedaService
-
-	refRepo domain.ReferenceRepository // Para tablas de referencia (marcas, tipos, colores)
+	alertaSvc    *service.AlertaService
+	refRepo      domain.ReferenceRepository
 }
 
-// NewServer crea una nueva instancia del servidor MCP
 func NewServer(
 	cfg config.MCPConfig,
 	bicicletaSvc *service.BicicletaService,
 	extractorSvc *service.ExtractorService,
 	busquedaSvc *service.BusquedaService,
-	refRepo domain.ReferenceRepository, // ✅ Nuevo parámetro
+	alertaSvc *service.AlertaService,
+	refRepo domain.ReferenceRepository,
 ) *Server {
 	return &Server{
 		cfg:          cfg,
 		bicicletaSvc: bicicletaSvc,
 		extractorSvc: extractorSvc,
 		busquedaSvc:  busquedaSvc,
-		refRepo:      refRepo, // ✅ Asignar el repositorio
+		alertaSvc:    alertaSvc,
+		refRepo:      refRepo,
 	}
 }
 
@@ -93,7 +94,25 @@ func (s *Server) registrarTools() {
 		Description: "Obtiene el historial de búsquedas de un usuario",
 	}, s.handleObtenerHistorial)
 
-	log.Println("✅ 4 herramientas registradas")
+	// Tool 5: Buscar y generar alertas de bicicleta robada
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "buscar_y_alertar",
+		Description: "Busca en marketplaces y genera alertas cuando encuentra posibles coincidencias con una bicicleta registrada",
+	}, s.handleBuscarYAlertar)
+
+	// Tool 6: Listar alertas de un usuario
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "listar_alertas",
+		Description: "Lista las alertas de posibles coincidencias para un usuario, filtrable por estado",
+	}, s.handleListarAlertas)
+
+	// Tool 7: Actualizar estado de una alerta
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "actualizar_estado_alerta",
+		Description: "Actualiza el estado de una alerta (REVISADA, CONFIRMADA, DESCARTADA)",
+	}, s.handleActualizarEstadoAlerta)
+
+	log.Println("✅ 7 herramientas registradas")
 }
 
 // internal/mcp/server.go

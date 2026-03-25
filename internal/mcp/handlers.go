@@ -375,6 +375,144 @@ Proporciona un análisis detallado con recomendaciones específicas.`,
 }
 
 // ===========================================
+// Handler: Buscar y generar alertas
+// ===========================================
+
+type BuscarYAlertarInput struct {
+	BicicletaID string  `json:"bicicleta_id" jsonschema:"ID de la bicicleta registrada a buscar"`
+	Presupuesto float64 `json:"presupuesto" jsonschema:"Precio máximo de referencia para filtrar resultados"`
+}
+
+func (s *Server) handleBuscarYAlertar(ctx context.Context, req *mcp.CallToolRequest, input BuscarYAlertarInput) (*mcp.CallToolResult, any, error) {
+	if input.BicicletaID == "" {
+		return nil, nil, fmt.Errorf("bicicleta_id es requerido")
+	}
+
+	// 1. Cargar bicicleta desde DB
+	bici, err := s.bicicletaSvc.ObtenerBicicletaPorID(ctx, input.BicicletaID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("bicicleta no encontrada: %w", err)
+	}
+
+	// 2. Convertir a BicicletaInfo para búsqueda
+	biciInfo, err := s.extractorSvc.ExtraerInfoPorID(ctx, input.BicicletaID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error cargando info de bicicleta: %w", err)
+	}
+
+	// 3. Buscar en marketplaces
+	presupuesto := input.Presupuesto
+	if presupuesto <= 0 {
+		presupuesto = 999999 // sin límite de precio para búsqueda de bici robada
+	}
+	resultados, err := s.busquedaSvc.BuscarBicisSimilares(ctx, biciInfo, presupuesto)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error buscando en marketplaces: %w", err)
+	}
+
+	// 4. Evaluar y generar alertas
+	alertas, err := s.alertaSvc.EvaluarYGenerarAlertas(ctx, bici, resultados)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error generando alertas: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("## 🔍 Búsqueda: %s %s\n\n", bici.Marca, bici.Modelo))
+	sb.WriteString(fmt.Sprintf("Resultados encontrados: **%d** | Alertas generadas: **%d**\n\n", len(resultados), len(alertas)))
+
+	if len(alertas) == 0 {
+		sb.WriteString("✅ Sin coincidencias sospechosas en esta búsqueda.")
+	} else {
+		sb.WriteString("### 🚨 Posibles Coincidencias\n\n")
+		sb.WriteString("| Score | Marketplace | Precio | Título | URL |\n")
+		sb.WriteString("|-------|-------------|--------|--------|-----|\n")
+		for _, a := range alertas {
+			sb.WriteString(fmt.Sprintf("| %.0f%% | %s | $%.2f | %s | [Ver](%s) |\n",
+				a.ScoreSimilitud, a.Marketplace, a.Precio, a.Titulo, a.URL))
+		}
+	}
+
+	return &mcp.CallToolResult{
+		Content:           []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+		StructuredContent: alertas,
+	}, nil, nil
+}
+
+// ===========================================
+// Handler: Listar alertas
+// ===========================================
+
+type ListarAlertasInput struct {
+	UsuarioID   string `json:"usuario_id" jsonschema:"ID del usuario"`
+	BicicletaID string `json:"bicicleta_id,omitempty" jsonschema:"Filtrar por bicicleta específica (opcional)"`
+	Status      string `json:"status,omitempty" jsonschema:"Filtrar por estado: NUEVA, REVISADA, CONFIRMADA, DESCARTADA"`
+}
+
+func (s *Server) handleListarAlertas(ctx context.Context, req *mcp.CallToolRequest, input ListarAlertasInput) (*mcp.CallToolResult, any, error) {
+	if input.UsuarioID == "" && input.BicicletaID == "" {
+		return nil, nil, fmt.Errorf("usuario_id o bicicleta_id es requerido")
+	}
+
+	var alertas []*domain.Alerta
+	var err error
+
+	if input.BicicletaID != "" {
+		alertas, err = s.alertaSvc.ObtenerAlertasPorBicicleta(ctx, input.BicicletaID)
+	} else {
+		var status *string
+		if input.Status != "" {
+			status = &input.Status
+		}
+		alertas, err = s.alertaSvc.ObtenerAlertasPorUsuario(ctx, input.UsuarioID, status)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("error obteniendo alertas: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("## 🚨 Alertas (%d)\n\n", len(alertas)))
+
+	if len(alertas) == 0 {
+		sb.WriteString("Sin alertas para los criterios indicados.")
+	} else {
+		sb.WriteString("| ID | Score | Estado | Marketplace | Precio | Título |\n")
+		sb.WriteString("|----|-------|--------|-------------|--------|--------|\n")
+		for _, a := range alertas {
+			sb.WriteString(fmt.Sprintf("| `%s` | %.0f%% | %s | %s | $%.2f | [%s](%s) |\n",
+				a.ID, a.ScoreSimilitud, a.Status, a.Marketplace, a.Precio, a.Titulo, a.URL))
+		}
+	}
+
+	return &mcp.CallToolResult{
+		Content:           []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+		StructuredContent: alertas,
+	}, nil, nil
+}
+
+// ===========================================
+// Handler: Actualizar estado de alerta
+// ===========================================
+
+type ActualizarEstadoAlertaInput struct {
+	ID     string `json:"id" jsonschema:"ID de la alerta"`
+	Status string `json:"status" jsonschema:"Nuevo estado: REVISADA, CONFIRMADA o DESCARTADA"`
+}
+
+func (s *Server) handleActualizarEstadoAlerta(ctx context.Context, req *mcp.CallToolRequest, input ActualizarEstadoAlertaInput) (*mcp.CallToolResult, any, error) {
+	if input.ID == "" || input.Status == "" {
+		return nil, nil, fmt.Errorf("id y status son requeridos")
+	}
+	if err := s.alertaSvc.ActualizarStatus(ctx, input.ID, input.Status); err != nil {
+		return nil, nil, err
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{
+			Text: fmt.Sprintf("✅ Alerta `%s` actualizada a **%s**", input.ID, input.Status),
+		}},
+	}, nil, nil
+}
+
+// ===========================================
 // Funciones Auxiliares
 // ===========================================
 

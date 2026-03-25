@@ -3,161 +3,79 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
-	"strings"
-	"sync"
 
 	"github.com/juantevez/mcp-bike-finder/internal/domain"
-	"github.com/juantevez/mcp-bike-finder/internal/infrastructure/ocr"
-	"github.com/juantevez/mcp-bike-finder/internal/infrastructure/s3"
-	"github.com/juantevez/mcp-bike-finder/internal/infrastructure/vision"
-	"github.com/juantevez/mcp-bike-finder/pkg/parser"
 )
 
-// ===========================================
-// ExtractorService
-// ===========================================
-
+// ExtractorService convierte una bicicleta registrada en la DB en un BicicletaInfo
+// listo para ser usado como criterio de búsqueda en marketplaces.
 type ExtractorService struct {
-	s3Client     *s3.Client
-	ocrClient    *ocr.Client
-	visionClient *vision.Client
-	bikeParser   *parser.BikeParser
+	biciRepo domain.BicicletaRepository
 }
 
-// NewExtractorService crea una nueva instancia del servicio extractor
-func NewExtractorService(
-	s3Client *s3.Client,
-	ocrClient *ocr.Client,
-	visionClient *vision.Client,
-) *ExtractorService {
-	return &ExtractorService{
-		s3Client:     s3Client,
-		ocrClient:    ocrClient,
-		visionClient: visionClient,
-		bikeParser:   parser.NewBikeParser(),
-	}
+func NewExtractorService(biciRepo domain.BicicletaRepository) *ExtractorService {
+	return &ExtractorService{biciRepo: biciRepo}
 }
 
-// ExtraerInfoBicicleta extrae toda la información de una imagen de bicicleta
-func (s *ExtractorService) ExtraerInfoBicicleta(ctx context.Context, s3URL string) (*domain.BicicletaInfo, error) {
-
-	log.Printf("🔍 Extrayendo información de: %s", s3URL)
-
-	// 1. Descargar imagen desde S3
-	imgData, err := s.s3Client.Download(ctx, s3URL)
+// ExtraerInfoBicicleta carga los datos de una bicicleta desde la DB por su URL de imagen
+// y los convierte en BicicletaInfo para usarlos como criterio de búsqueda.
+func (s *ExtractorService) ExtraerInfoBicicleta(ctx context.Context, imagenS3URL string) (*domain.BicicletaInfo, error) {
+	bici, err := s.biciRepo.ObtenerPorImagenURL(ctx, imagenS3URL)
 	if err != nil {
-		return nil, fmt.Errorf("error descargando imagen de S3: %w", err)
+		return nil, fmt.Errorf("error buscando bicicleta: %w", err)
 	}
-
-	if len(imgData) == 0 {
-		return nil, fmt.Errorf("la imagen está vacía")
+	if bici == nil {
+		return nil, fmt.Errorf("no hay bicicleta registrada con imagen: %s", imagenS3URL)
 	}
-
-	log.Printf("📥 Imagen descargada: %d bytes", len(imgData))
-
-	// 2. Ejecutar OCR y Visión en paralelo
-	var wg sync.WaitGroup
-	var textoOCR string
-	var visionResult *domain.VisionResult
-	var ocrErr, visionErr error
-	errChan := make(chan error, 2)
-
-	wg.Add(2)
-
-	// Goroutine 1: OCR (extraer texto)
-	go func() {
-		defer wg.Done()
-		textoOCR, ocrErr = s.ocrClient.DetectText(ctx, imgData)
-		if ocrErr != nil {
-			log.Printf("⚠️ OCR falló: %v", ocrErr)
-			errChan <- ocrErr
-			return
-		}
-		log.Printf("📝 Texto OCR extraído: %d caracteres", len(textoOCR))
-		errChan <- nil
-	}()
-
-	// Goroutine 2: Visión por computadora (detectar objetos, colores, etc.)
-	go func() {
-		defer wg.Done()
-		visionResult, visionErr = s.visionClient.AnalyzeBike(ctx, imgData)
-		if visionErr != nil {
-			log.Printf("⚠️ Visión falló: %v", visionErr)
-			errChan <- visionErr
-			return
-		}
-		log.Printf("👁️ Análisis de visión completado")
-		errChan <- nil
-	}()
-
-	wg.Wait()
-	close(errChan)
-
-	// Verificar errores (continuar si al menos uno funcionó)
-	// OCR es crítico, Visión es complementaria
-	if ocrErr != nil && textoOCR == "" {
-		return nil, fmt.Errorf("OCR falló y es requerido: %w", ocrErr)
-	}
-
-	// 3. Parsear y estructurar la información
-	biciInfo := s.bikeParser.Parsear(textoOCR, visionResult)
-
-	// 4. Validación cruzada (OCR vs Visión)
-	s.validacionCruzada(biciInfo, visionResult)
-
-	log.Printf("✅ Extracción completada: %s %s", biciInfo.Marca, biciInfo.Modelo)
-
-	return biciInfo, nil
+	return bicicletaToInfo(bici), nil
 }
 
-// validacionCruzada compara resultados de OCR y Visión para mejorar precisión
-func (s *ExtractorService) validacionCruzada(info *domain.BicicletaInfo, vision *domain.VisionResult) {
-
-	if vision == nil {
-		return
-	}
-
-	// Si OCR no detectó color pero Visión sí, usar Visión
-	if info.Color == "" && vision.ColorDominante != "" {
-		info.Color = vision.ColorDominante
-		log.Printf("🎨 Color completado desde visión: %s", info.Color)
-	}
-
-	// Si OCR no detectó tipo pero Visión sí, usar Visión
-	if info.Tipo == "" && vision.TipoBicicleta != "" {
-		info.Tipo = vision.TipoBicicleta
-		log.Printf("🚴 Tipo completado desde visión: %s", info.Tipo)
-	}
-
-	// Si hay conflicto de color, priorizar Visión (más confiable para colores)
-	if info.Color != "" && vision.ColorDominante != "" {
-		if !strings.EqualFold(info.Color, vision.ColorDominante) {
-			log.Printf("⚠️ Conflicto de color - OCR: %s, Visión: %s. Usando Visión.",
-				info.Color, vision.ColorDominante)
-			info.Color = vision.ColorDominante
-		}
-	}
-}
-
-// ExtraerSoloTexto extrae únicamente el texto de una imagen (sin parsear)
-func (s *ExtractorService) ExtraerSoloTexto(ctx context.Context, s3URL string) (string, error) {
-
-	imgData, err := s.s3Client.Download(ctx, s3URL)
+// ExtraerInfoPorID carga los datos de una bicicleta desde la DB por su ID.
+func (s *ExtractorService) ExtraerInfoPorID(ctx context.Context, id string) (*domain.BicicletaInfo, error) {
+	bici, err := s.biciRepo.ObtenerPorID(ctx, id)
 	if err != nil {
-		return "", fmt.Errorf("error descargando imagen: %w", err)
+		return nil, fmt.Errorf("bicicleta no encontrada: %w", err)
 	}
-
-	return s.ocrClient.DetectText(ctx, imgData)
+	return bicicletaToInfo(bici), nil
 }
 
-// ValidarImagen verifica que la imagen sea válida y contenga una bicicleta
-func (s *ExtractorService) ValidarImagen(ctx context.Context, s3URL string) (*domain.ImageValidation, error) {
-
-	imgData, err := s.s3Client.Download(ctx, s3URL)
-	if err != nil {
-		return nil, fmt.Errorf("error descargando imagen: %w", err)
+// bicicletaToInfo convierte una entidad Bicicleta en un BicicletaInfo para búsqueda.
+func bicicletaToInfo(b *domain.Bicicleta) *domain.BicicletaInfo {
+	info := &domain.BicicletaInfo{
+		Marca:  b.Marca,
+		Modelo: b.Modelo,
+		Anio:   b.Anio,
+		Color:  b.Color,
+		Talle:  b.Talle,
+		Tipo:   b.Tipo,
 	}
 
-	return s.visionClient.ValidateImage(ctx, imgData)
+	// Mapear componentes desde el JSONB si existen
+	if b.Components != nil {
+		comps := domain.ComponentesBici{}
+		if v, ok := b.Components["asiento"].(string); ok {
+			comps.Asiento = v
+		}
+		if v, ok := b.Components["tija"].(string); ok {
+			comps.Tija = v
+		}
+		if v, ok := b.Components["manubrio"].(string); ok {
+			comps.Manubrio = v
+		}
+		if v, ok := b.Components["suspension"].(string); ok {
+			comps.Suspension = v
+		}
+		if v, ok := b.Components["transmision"].(string); ok {
+			comps.Transmision = v
+		}
+		if v, ok := b.Components["frenos"].(string); ok {
+			comps.Frenos = v
+		}
+		if v, ok := b.Components["ruedas"].(string); ok {
+			comps.Ruedas = v
+		}
+		info.Componentes = comps
+	}
+
+	return info
 }

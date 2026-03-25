@@ -12,11 +12,17 @@ import (
 // ===========================================
 
 type Config struct {
-	MCP     MCPConfig
-	DB      DBConfig
-	AWS     AWSConfig
-	OCR     OCRConfig
-	Scraper ScraperConfig
+	MCP       MCPConfig
+	DB        DBConfig
+	AWS       AWSConfig
+	OCR       OCRConfig
+	Scraper   ScraperConfig
+	Scheduler SchedulerConfig
+}
+
+type SchedulerConfig struct {
+	IntervaloHoras int // cada cuántas horas correr las búsquedas automáticas
+	LimiteBicis    int // máximo de bicis a procesar por ronda
 }
 
 type MCPConfig struct {
@@ -97,6 +103,10 @@ func Load() (*Config, error) {
 				getEnv("MARKETPLACE_URLS", "https://mercadolibre.com"),
 			},
 		},
+		Scheduler: SchedulerConfig{
+			IntervaloHoras: getEnvInt("SCHEDULER_INTERVALO_HORAS", 6),
+			LimiteBicis:    getEnvInt("SCHEDULER_LIMITE_BICIS", 100),
+		},
 	}
 
 	// Validar configuración requerida
@@ -123,6 +133,16 @@ func (c *Config) Validate() error {
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultValue
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		var i int
+		if _, err := fmt.Sscanf(value, "%d", &i); err == nil {
+			return i
+		}
 	}
 	return defaultValue
 }
